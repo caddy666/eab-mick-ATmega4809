@@ -62,6 +62,7 @@
 
 #include <stdlib.h>    /* abs() */
 #include <stdint.h>
+#include <limits.h>    /* INT8_MIN */
 
 #include "defs.h"
 #include "serv_def.h"
@@ -81,7 +82,6 @@ extern volatile uint8_t timers[];
 
 extern uint8_t  player_error;    /* written here on error; read by player.c     */
 extern uint8_t  hex_abs_min;     /* absolute disc minute position; used for zone */
-extern uint8_t  simulation_timer;/* motor-speed simulation down-counter          */
 extern volatile uint8_t scor_edge;
 
 /* Provided by subcode.c: start_subcode_reading() arms the Q-channel decoder;
@@ -115,8 +115,10 @@ uint8_t reload_servo_timer;/**< Used in stop sequences that need two timer round
 uint8_t disc_size;         /**< DISC_8CM or DISC_12CM — affects motor gain            */
 uint8_t disc_size_known;   /**< 1 once disc diameter has been determined              */
 
-static uint8_t kick;   /**< 1 = we are in the kick phase of a long outward jump */
-static uint8_t brk;    /**< 1 = we are in the brake phase of a long inward jump  */
+static uint8_t kick;      /**< 1 = we are in the kick phase of a long outward jump */
+static uint8_t brk;       /**< 1 = we are in the brake phase of a long inward jump  */
+static uint8_t was_at_2x; /**< 1 if disc was spinning at 2× when stop_servo_state ran;
+                            *   used for an extra coasting settle stage in check_stop. */
 
 /* n1_speed is defined in driver.c and shared here so the servo module can
  * apply correct gain and brake calculations for the current speed setting. */
@@ -150,6 +152,8 @@ static uint8_t dsic_in_focus(void)
  */
 static uint8_t dsic_on_track(void)
 {
+    /* rd_dsic2() returns 0 (DSIC2 not connected, PIN_DSIC_CLK = -1), so
+     * bit 1 (TE) is always clear and this function always returns 1. */
     uint8_t v = rd_dsic2();
     return (v & 0x02u) ? 0u : 1u;   /* bit 1 = TE: 0=on-track, 1=off-track */
 }
@@ -183,6 +187,11 @@ static uint8_t sledge_switch(void)
 
 /* =========================================================================
  * Sledge and radial helpers
+ *
+ * All wr_dsic2() calls in this section are compile-time no-ops on this PCB
+ * revision: PIN_DSIC_CLK is (-1) so the #if PIN_DSIC_CLK >= 0 guard in
+ * driver.cpp silently discards every write.  Sledge and radial actuators
+ * are not driven; the CXD2545Q's own integrated servo handles tracking.
  * ====================================================================== */
 
 /** Drive the sledge inward (toward disc centre / lead-in) at full power. */
@@ -266,7 +275,7 @@ uint8_t switch_laser_on(void)
 static void switch_laser_off(void)
 {
     wr_dsic2(PRESET);
-    wr_dsic2(LASER_OFF);
+    wr_dsic2(LASER_OFF_DATA);
 }
 
 /**
@@ -320,8 +329,8 @@ void jump_servo_state(void);
 
 static uint8_t active_brake_ok(void)
 {
-    if (!disc_size) return 0;      /* disc size not yet known */
-    if (!door_closed()) return 0;  /* door is open — no disc */
+    if (!disc_size_known) return 0;  /* disc size not yet determined */
+    if (!door_closed()) return 0;    /* door is open — no disc */
     return 1;
 }
 
@@ -346,9 +355,10 @@ static uint8_t calc_kick(void)
 {
     int time;
     uint8_t offset;
+    uint8_t area = get_area();
 
-    if      (get_area() == 1) offset = 6;
-    else if (get_area() == 2) offset = (off_track_value > 4000) ? 6 : 1;
+    if      (area == 1) offset = 6;
+    else if (area == 2) offset = (off_track_value > 4000) ? 6 : 1;
     else    offset = n1_speed ? 0 : ((off_track_value > 10000) ? 9 : 0);
 
     /* Proportional term: off_track_value / 8 × 3 / 128 ≈ off_track × 0.003 */
@@ -368,14 +378,15 @@ static uint8_t calc_kick(void)
 static uint8_t calc_brake(void)
 {
     int time;
+    uint8_t area = get_area();
     if (n1_speed) {
-        if      (get_area() == 1) time = 6;
-        else if (get_area() == 2) time = 1;
-        else                      time = 0;
+        if      (area == 1) time = 6;
+        else if (area == 2) time = 1;
+        else                time = 0;
     } else {
-        if      (get_area() == 1) time = 16;
-        else if (get_area() == 2) time = 3;
-        else                      time = 0;
+        if      (area == 1) time = 16;
+        else if (area == 2) time = 3;
+        else                time = 0;
     }
     return (uint8_t)time;
 }
@@ -623,8 +634,8 @@ static void ttm_speedup_state(void)
 /**
  * CHECK_TTM — wait for the spindle to reach ≥75% nominal speed.
  *
- * status_cd6(MOT_STRT_1) returns 1 once simulation_timer (loaded by
- * cd6_wr(MOT_STRTM2_ACTIVE) to ~75 ticks) reaches zero.
+ * status_cd6(MOT_STRT_1) returns 1 when GFS goes HIGH (EFM sync present),
+ * indicating the spindle has reached CLV lock speed.
  *
  * Once at speed we verify that HF (high-frequency) is present — if not,
  * there is no disc or the disc is unreadable.
@@ -703,7 +714,10 @@ static void init_radial_state(void)
  */
 static void upto_n2_state(void)
 {
-    if (servo_timer < UPTO_N2_TIME) {
+    /* servo_timer was loaded to UPTO_N2_TIME (10) before this state was
+     * entered (from servo_monitor_state).  Wait for it to reach zero:
+     * 10 × 8 ms = 80 ms settling time. */
+    if (servo_timer == 0) {
         cd6_wr(MOT_PLAYM_ACTIVE);
         start_subcode_reading();
         servo_state = WAIT_SUBCODE;
@@ -721,8 +735,8 @@ static void upto_n2_state(void)
 static void downto_n1_state(void)
 {
     if (!n1_speed) {
-        /* We are still at 2× — wait for MOT_STRT_2 or timeout */
-        if (!status_cd6(MOT_STRT_2) || servo_timer == 0) {
+        /* We are still at 2× — wait for timeout before switching to N1 */
+        if (servo_timer == 0) {
             cd6_wr(SPEED_CONTROL_N1);
             cd6_wr(MOT_STRTM2_ACTIVE);
             n1_speed = 1;
@@ -774,7 +788,10 @@ static void servo_monitor_state(void)
                 cd6_wr(MOT_BRM2_ACTIVE);
                 servo_timer = N2_TO_N1_BRAKE_TIME;
             } else if (n1_speed && n2_speed_req) {
-                /* Currently at 1× but 2× has been requested — ramp up */
+                /* Currently at 1× but 2× has been requested — ramp up.
+                 * Load the settling timer before entering UPTO_N2 so the
+                 * 80 ms wait is deterministic (UPTO_N2_TIME × 8 ms). */
+                servo_timer = UPTO_N2_TIME;
                 servo_state = UPTO_N2;
                 cd6_wr(SPEED_CONTROL_N2);
                 cd6_wr(MOT_STRTM2_ACTIVE);
@@ -805,7 +822,8 @@ static void servo_monitor_state(void)
  */
 static void radial_recover_state(void)
 {
-    servo_retries--;
+    servo_exec_state = BUSY;   /* prevent callers seeing READY during recovery */
+
     if (servo_retries == 0) {
         /* Exhausted retries — determine the root cause */
         if (!hf_present())
@@ -819,6 +837,7 @@ static void radial_recover_state(void)
         servo_state           = STOP_SERVO;
         servo_requested_state = SERVO_IDLE;
     } else {
+        servo_retries--;   /* decrement after confirming at least one retry remains */
         turn_radial_off();
         if (sledge_switch() == CLOSED) {
             /* At inner stop — move outward before retrying */
@@ -845,7 +864,6 @@ static void focus_recover_state(void)
 {
     turn_radial_off();
     cd6_wr(MOT_OFF_ACTIVE);   /* stop motor immediately */
-    servo_retries--;
     if (servo_retries == 0) {
         servo_exec_state      = CD_ERROR_STATE;
         servo_state           = STOP_SERVO;
@@ -854,6 +872,7 @@ static void focus_recover_state(void)
          * report HF_DETECTOR_ERROR (likely a gap in the disc surface). */
         player_error = no_efm_in_jump ? HF_DETECTOR_ERROR : FOCUS_ERROR;
     } else {
+        servo_retries--;   /* decrement after confirming at least one retry remains */
         servo_timer = F_REC_IN_SLEDGE;
         servo_state = SLEDGE_INSIDE_RECOVER;
         sledge_in();   /* retract to known inner position */
@@ -927,7 +946,8 @@ static void stop_servo_state(void)
             servo_timer        = MOT_OFF_STOP_TIME;
             reload_servo_timer = 1;
             initialized        = 0;
-            motor_on_speed     = (uint8_t)!n1_speed;   /* clear if at 1×, preserve if 2× */
+            was_at_2x          = (uint8_t)!n1_speed;   /* extra coasting stage if stopped from 2× */
+            motor_on_speed     = 0;                     /* motor is no longer at playback speed */
             if (!active_brake_ok()) {
                 servo_timer   = 0;
                 motor_started = 0;
@@ -983,9 +1003,9 @@ static void check_stop_servo_state(void)
             /* Coasting stop: two-stage wait via reload_servo_timer */
             if (servo_timer == 0) {
                 servo_timer = MOT_OFF_STOP_TIME;
-                if (reload_servo_timer)      reload_servo_timer = 0;
-                else if (motor_on_speed)     motor_on_speed     = 0;
-                else                         motor_started      = 0;
+                if (reload_servo_timer)  reload_servo_timer = 0;
+                else if (was_at_2x)      was_at_2x          = 0;   /* extra stage for 2× stops */
+                else                     motor_started      = 0;
             }
         }
 
@@ -1044,8 +1064,11 @@ void jump_servo_state(void)
         cd6_wr(MOT_OFF_ACTIVE);   /* motor off for medium jump */
         jump_long(brake_dist);
     } else {
-        /* Maximum brake distance for long jump */
-        brake_dist = (int8_t)((int)BRAKE_DIS_MAX / -16);
+        /* Maximum brake distance for long jump.
+         * BRAKE_DIS_MAX / -16 = 3000 / -16 = -187, which overflows int8_t
+         * (range -128..127).  Clamp to INT8_MIN (-128) — the largest negative
+         * value the DSIC2 brake field can represent. */
+        brake_dist = INT8_MIN;
         if (grooves.val > 0) {
             /* Outward jump: kick the sledge to assist */
             kick_brake_timer = calc_kick();
@@ -1136,8 +1159,8 @@ static void check_jump_state(void)
  */
 static void wait_subcode_state(void)
 {
-    if (!status_cd6(SUBCODE_READY)) {
-        /* Subcode has arrived — we are confirmed on track */
+    if (status_cd6(SUBCODE_READY)) {
+        /* SCOR edge arrived — subcode confirmed, we are on track */
         servo_state = SERVO_MONITOR;
         servo_timer = SUBCODE_MONITOR_TIMEOUT;
     } else if (servo_timer == 0) {
@@ -1202,7 +1225,7 @@ void servo_init(void)
     servo_exec_state      = BUSY;
     n1_speed              = 1;
     disc_size             = DISC_12CM;          /* assume 12 cm until detected */
-    n2_speed_req          = (N == 2) ? 1u : 0u; /* honour compile-time N setting */
+    n2_speed_req          = (DEFAULT_DISC_SPEED == 2) ? 1u : 0u; /* honour compile-time speed setting */
 }
 
 /**

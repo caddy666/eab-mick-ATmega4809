@@ -1,8 +1,8 @@
 /**
  * @file  timer.h
- * @brief Software timer subsystem — 8 ms tick via Pico hardware repeating timer.
+ * @brief Software timer subsystem — 8 ms tick via ATmega4809 TCB1.
  *
- * A single hardware repeating_timer fires every 8 ms and decrements all
+ * TCB1 fires every 8 ms (CCMP=63999, CLK_PER/2=8 MHz) and decrements all
  * non-zero entries in the timers[] array.  Modules obtain a timer by
  * writing a count; they poll for expiry by testing for zero.
  *
@@ -11,8 +11,8 @@
  * approximately 6 software ticks per frame, which is enough resolution
  * for all servo and play timing without overloading the CPU.
  *
- * The SCOR (subcode clock) falling-edge interrupt is also installed here
- * because it shares the GPIO interrupt handler infrastructure.
+ * The SCOR (subcode clock) falling-edge interrupt is installed here via
+ * attachInterrupt(digitalPinToInterrupt(PIN_SCOR), scor_isr, FALLING).
  */
 
 #pragma once
@@ -44,10 +44,10 @@ typedef enum {
  * Global timer array
  *
  * Each entry is decremented to zero and held there.  Write a count to arm;
- * read zero to detect expiry.  Writes are not atomic vs the ISR, but since
- * all writes happen in the main loop (not in IRQ context) and the ISR only
- * decrements, a write that races with a decrement can miss one tick at
- * most — acceptable for the timing tolerances in this firmware.
+ * read zero to detect expiry.  On 8-bit AVR, uint8_t reads and writes are
+ * single instructions (inherently atomic).  A main-loop write that races
+ * with an ISR decrement can miss at most one tick, which is acceptable for
+ * the timing tolerances in this firmware.
  * ---------------------------------------------------------------------- */
 extern volatile uint8_t timers[TIMER_COUNT];
 

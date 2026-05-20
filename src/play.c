@@ -244,9 +244,9 @@ static uint8_t track_found          = 0;
 /** If 1, audio remains muted after a seek completes (used for certain host modes). */
 static uint8_t mute_on_after_search = 0;
 
-/* Exposed to cmd_hndl.c and the Dispatcher for status queries */
-uint8_t play_monitor      = 0;   /**< 1 = command complete; background monitor active */
-uint8_t play_command_busy = 0;   /**< 1 = a play command is currently executing       */
+/* Internal state — not referenced outside play.c */
+static uint8_t play_monitor      = 0;   /**< 1 = command complete; background monitor active */
+static uint8_t play_command_busy = 0;   /**< 1 = a play command is currently executing       */
 
 /* =========================================================================
  * Public helpers called from cmd_hndl.c / service.c
@@ -339,9 +339,12 @@ uint8_t jump_time(cd_time_t *pt)
             int nr = calc_tracks(&store.play_times.tmp_time, pt);
 
             if (nr == 0) {
-                /* We are on the target track — count fractional frames */
-                cd_time_t delta;
-                subtract_time(pt, &store.play_times.tmp_time, &delta);
+                /* We are on the target track — count fractional frames.
+                 * Guard required: calc_tracks() rounds to ~16-groove resolution,
+                 * so tmp_time may be fractionally ahead of pt even when nr==0. */
+                cd_time_t delta = {0u, 0u, 0u};
+                if (compare_time(pt, &store.play_times.tmp_time) != SMALLER)
+                    subtract_time(pt, &store.play_times.tmp_time, &delta);
                 init_scor_counter(delta.frm);
                 /* → "on target, counting SCOR" state */
                 jump_phase1 = 1;
@@ -544,6 +547,11 @@ static uint8_t monitor_subcodes(void)
         if ((play_status & 0x0Fu) == PAUSE_MODE) {
             /* Paused: the subcode is already in store.play_subcode */
             if (req_subc_stored_subc()) {
+                /* param1 is used as a packet-type tag by the host, not a real
+                 * pointer — the subcode data travels in the status packet body.
+                 * The cast to uint8_t intentionally discards the high byte of
+                 * the 16-bit AVR pointer; the low byte is the opaque tag value
+                 * the Amiga firmware expects (8051 heritage: 8-bit data ptrs). */
                 player_interface.param1 = (uint8_t)(uintptr_t)&store.play_subcode;
                 return PROCESS_READY;
             }
@@ -591,6 +599,7 @@ static uint8_t monitor_subcodes(void)
             } else {
                 set_subcode_buffer();
                 if (req_subc_stored_subc()) {
+                    /* Same opaque-tag convention as the paused-path above. */
                     player_interface.param1 = (uint8_t)(uintptr_t)&store.play_subcode;
                     return PROCESS_READY;
                 }
@@ -1038,38 +1047,36 @@ void execute_play_functions(void)
         uint8_t cmd  = play_process >> 4;
         uint8_t step = play_process & 0x0Fu;
 
-        if (cmd  >= 12u) goto monitor;
-        if (step >= MAX_PLAY_STEPS) goto monitor;
+        if (cmd < 12u && step < MAX_PLAY_STEPS) {
+            play_fn_t fn = play_processes[cmd][step];
+            if (fn != NULL) {
+                switch (fn()) {
+                case PROCESS_READY:
+                    /* Command is fully complete */
+                    play_status  = (uint8_t)((play_status & 0x0Fu) | (uint8_t)(READY << 4));
+                    play_monitor = 1;
+                    break;
 
-        play_fn_t fn = play_processes[cmd][step];
-        if (fn == NULL) goto monitor;
+                case READY:
+                    /* This step is done — advance to the next step and clear phase vars */
+                    play_process++;
+                    play_phase0 = 0;
+                    play_phase1 = 0;
+                    break;
 
-        switch (fn()) {
-        case PROCESS_READY:
-            /* Command is fully complete */
-            play_status  = (uint8_t)((play_status & 0x0Fu) | (uint8_t)(READY << 4));
-            play_monitor = 1;
-            break;
+                case CD_ERROR_STATE:
+                    play_status  = (uint8_t)((play_status & 0x0Fu) | (uint8_t)(CD_ERROR_STATE << 4));
+                    play_monitor = 1;
+                    break;
 
-        case READY:
-            /* This step is done — advance to the next step and clear phase vars */
-            play_process++;
-            play_phase0 = 0;
-            play_phase1 = 0;
-            break;
-
-        case CD_ERROR_STATE:
-            play_status  = (uint8_t)((play_status & 0x0Fu) | (uint8_t)(CD_ERROR_STATE << 4));
-            play_monitor = 1;
-            break;
-
-        case BUSY:
-        default:
-            break;
+                case BUSY:
+                default:
+                    break;
+                }
+            }
         }
     }
 
-monitor:
     if (play_monitor) {
         uint8_t mode = play_status & 0x0Fu;
         uint8_t stat = play_status >> 4;

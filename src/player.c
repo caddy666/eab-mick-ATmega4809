@@ -260,7 +260,7 @@ void player_init(void)
 {
     timer_init();
     driver_init();
-    reset_dsic2_cd6();
+    reset_cxd2545q();
     servo_init();
     cd6_init();
 
@@ -300,9 +300,11 @@ void player(void)
                 player_interface.param1   = ILLEGAL_COMMAND;
                 process_id = IDLE_OPC;
             } else if (!service_mode) {
-                /* Service command issued while in normal mode */
-                player_error = ILLEGAL_COMMAND;
-                process_id   = ERROR_HANDLING_ID;
+                /* Service command issued while in normal mode — reject without
+                 * stopping the disc (ERROR_HANDLING_ID would call SS_MOTOR_OFF). */
+                player_interface.p_status = CD_ERROR_STATE;
+                player_interface.param1   = ILLEGAL_COMMAND;
+                process_id = IDLE_OPC;
             }
         } else {
             /* Normal-mode opcode */

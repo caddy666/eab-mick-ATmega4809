@@ -3,7 +3,7 @@
  * @brief DSIC2 (Sony CXA1372) servo IC — register constants and timing.
  *
  * The DSIC2 is a combined focus / radial / sledge servo controller that
- * sits between the RP2350 and the drive's analogue actuators.  It receives
+ * sits between the ATmega4809 and the drive's analogue actuators.  It receives
  * serial commands over the three-wire SICL/SIDA/SILD bus and returns an
  * 8-bit status byte on the bidirectional SIDA line.
  *
@@ -31,9 +31,11 @@
 /* -------------------------------------------------------------------------
  * DSIC2 single-byte commands
  * ---------------------------------------------------------------------- */
-#define PRESET      0x00  /**< Software reset — returns all servo loops to safe state  */
-#define LASER_ON    0x01  /**< Enable the laser-diode drive current                    */
-#define LASER_OFF   0x00  /**< Disable the laser-diode drive current                  */
+#define PRESET        0x00  /**< Software reset — returns all servo loops to safe state  */
+/* Data bytes sent as the second word of a PRESET command: */
+#define LASER_ON      0x01  /**< Laser-on  data byte: enable  laser-diode drive current */
+#define LASER_OFF_DATA 0x00 /**< Laser-off data byte: disable laser-diode drive current.
+                             *   Value is 0x00 — same as PRESET, but a distinct role.   */
 
 /* -------------------------------------------------------------------------
  * Multi-byte jump command headers
@@ -99,7 +101,9 @@
 #define N2_TO_N1_BRAKE_TIME     13  /**< Active-brake duration for 2× → 1× transition  */
 #define F_REC_IN_SLEDGE         13  /**< Max sledge-in time during focus recovery: 104 ms*/
 #define R_REC_OUT_SLEDGE         5  /**< Sledge-out time during radial recovery: 40 ms  */
-#define UPTO_N2_TIME            10  /**< Settling time when checking for 2× speed: 80 ms*/
+#define UPTO_N2_TIME            10  /**< 1× → 2× settling: servo_timer loaded to this
+                                     *   value before UPTO_N2 entry; fires when it reaches
+                                     *   zero (10 × 8 ms = 80 ms).                       */
 #define SUBCODE_TIMEOUT_VALUE   50  /**< Subcode wait used in strtstop / play: 400 ms   */
 
 /* -------------------------------------------------------------------------
@@ -125,5 +129,8 @@
  *   |grooves| > BRAKE_2       → long  jump (sledge assist, full kick/brake)
  * ---------------------------------------------------------------------- */
 #define MAX              150   /**< Maximum short-jump distance (actuator reach)   */
+/* Both limits are currently 3000 grooves.  They are kept as separate named
+ * constants so that if the medium→long threshold and the brake saturation
+ * limit are ever tuned independently, only one changes. */
 #define BRAKE_2_DIS_MAX 3000   /**< Transition from medium to long jump strategy   */
-#define BRAKE_DIS_MAX   3000   /**< Long-jump brake distance limit                 */
+#define BRAKE_DIS_MAX   3000   /**< Long-jump brake distance limit (saturates at INT8_MIN when divided by -16) */

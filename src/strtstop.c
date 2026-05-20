@@ -115,8 +115,8 @@ typedef union {
 } start_stop_store_t;
 
 /* Private to this module.  The original 8051 firmware overlaid this union
- * with play.c's 'store' via shared RAM.  On the Pico2 each module has its
- * own copy — no physical RAM sharing is needed. */
+ * with play.c's 'store' via shared RAM.  On the ATmega4809 each module has
+ * its own copy — no physical RAM sharing is needed. */
 static start_stop_store_t sst;
 
 /* =========================================================================
@@ -185,7 +185,7 @@ static uint8_t get_disk_type(void)
         start_subcode_reading();
         play_timer = SUBCODE_TIMEOUT_VALUE;
         start_stop_process++;
-        /* fall through immediately to case 1 */
+        __attribute__((fallthrough));
 
     case 1:
         /* Classify the current disc area from the first frame received */
@@ -223,7 +223,7 @@ static uint8_t get_disk_type(void)
         sst.toc_info.counter = 5;
         play_timer = SUBCODE_TIMEOUT_VALUE;
         start_stop_process++;
-        /* fall through to case 4 */
+        __attribute__((fallthrough));
 
     case 4:
         if (is_subcode(FIRST_LEADIN_AREA)) {

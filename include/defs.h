@@ -1,9 +1,9 @@
 /**
  * @file  defs.h
- * @brief Master type definitions and command opcodes for the CD32 Pico firmware.
+ * @brief Master type definitions and command opcodes for the eab-mick ATmega4809/CXD2545Q firmware.
  *
  * Ported from the original Commodore/Philips 8051 firmware (1992-1993).
- * Adapted for the RP2350 (Raspberry Pi Pico 2).
+ * Adapted for the ATmega4809 (MegaCoreX / Arduino framework).
  *
  * The Commodore CD32 uses a proprietary serial protocol (COMMO) over three
  * wires to the drive MCU.  The host sends one-byte opcodes (with optional
@@ -277,4 +277,4 @@ typedef struct {
  * player_interface (which uses byte-wide fields).
  * ---------------------------------------------------------------------- */
 typedef struct { byte high; byte low; } byte_hl_t;
-typedef union  { int val; byte_hl_t b; } int_hl_t;
+typedef union  { int16_t val; byte_hl_t b; } int_hl_t;

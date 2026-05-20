@@ -94,8 +94,6 @@ extern uint8_t  reload_servo_timer;
 extern interface_field_t player_interface;
 
 /* From servo.c */
-extern uint8_t dsic_in_focus_pub(void);
-extern uint8_t dsic_on_track_pub(void);
 extern void    jump_servo_state(void);
 extern void    servo_reinit_sledge(void);
 extern uint8_t switch_laser_on(void);
@@ -117,7 +115,7 @@ extern int status_cd6(uint8_t);
  *   bit 1 — TE  tracking error (0 = on track)
  *   bit 2 — SW  sledge switch  (0 = at home / CLOSED)
  */
-static uint8_t dsic_in_focus(void)  { return rd_dsic2() & 0x01u ? 0u : 1u; }
+static uint8_t dsic_in_focus(void)  { return (uint8_t)fok_locked(); }  /* matches servo.c */
 static uint8_t dsic_on_track(void)  { return rd_dsic2() & 0x02u ? 0u : 1u; }
 static uint8_t sledge_switch(void)  { return rd_dsic2() & 0x04u ? OPEN : CLOSED; }
 static uint8_t mute_on(void)        { cd6_wr(MUTE); return READY; }

@@ -86,12 +86,13 @@ static uint8_t s_acknowledge_update    = 0;
 
 static uint8_t Request_packet_transmit(uint8_t mode)
 {
-    switch (mode) {
+    if (mode == NO_UPDATE) return COMMO_TRUE;
 
-    case NO_UPDATE:
-        return COMMO_TRUE;
-
-    case STATUS_UPDATE:
+    /* STATUS_UPDATE, Q_READY and ID_READY all use the same 15-byte buffer and
+     * length (STATUS_PACKET_LENGTH == Q_PACKET_LENGTH == ID_PACKET_LENGTH == 15).
+     * They are kept as distinct symbolic values so future protocol extensions
+     * can diverge; the single send path is correct today. */
+    if (mode == STATUS_UPDATE || mode == Q_READY || mode == ID_READY) {
         if (SEND_STRING(SEND_STRING_COMPLETE,
                         Get_sts_q_id_ptr(),
                         STATUS_PACKET_LENGTH) == COMMO_TRUE) {
@@ -99,28 +100,9 @@ static uint8_t Request_packet_transmit(uint8_t mode)
             return COMMO_TRUE;
         }
         return COMMO_FALSE;
-
-    case Q_READY:
-        if (SEND_STRING(SEND_STRING_COMPLETE,
-                        Get_sts_q_id_ptr(),
-                        Q_PACKET_LENGTH) == COMMO_TRUE) {
-            s_acknowledge_update = 1;
-            return COMMO_TRUE;
-        }
-        return COMMO_FALSE;
-
-    case ID_READY:
-        if (SEND_STRING(SEND_STRING_COMPLETE,
-                        Get_sts_q_id_ptr(),
-                        ID_PACKET_LENGTH) == COMMO_TRUE) {
-            s_acknowledge_update = 1;
-            return COMMO_TRUE;
-        }
-        return COMMO_FALSE;
-
-    default:
-        return COMMO_FALSE;
     }
+
+    return COMMO_FALSE;
 }
 
 /* =========================================================================

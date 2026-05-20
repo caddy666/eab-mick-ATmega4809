@@ -36,11 +36,10 @@
  *
  * ── Initialisation sequence ───────────────────────────────────────────────
  *
- *   player_init()           — timer_init(), driver_init(), reset_dsic2_cd6(),
+ *   player_init()           — timer_init(), driver_init(), reset_cxd2545q(),
  *                              servo_init(), cd6_init()
  *   COMMO_INIT()            — COMMO GPIO pins + state machine reset
  *   Init_command_handler()  — clear pending command slot
- *   enable_scor_counter()   — no-op; attachInterrupt done inside timer_init()
  */
 
 #include <Arduino.h>
@@ -64,14 +63,13 @@ void setup(void)
     /* player_init() performs the full hardware bring-up sequence:
      *   timer_init()      — start TCB1 8 ms tick + SCOR interrupt
      *   driver_init()     — configure all GPIO pins
-     *   reset_dsic2_cd6() — assert reset, wait, release
+     *   reset_cxd2545q()  — post-reset settling delay for the CXD2545Q
      *   servo_init()      — set servo state machine to INIT_DSIC2
      *   cd6_init()        — send CXD2500 startup register sequence */
     player_init();
 
     COMMO_INIT();
     Init_command_handler();
-    enable_scor_counter();   /* no-op; SCOR ISR attached in timer_init() */
 
     digitalWrite(PIN_LED_STATUS, HIGH);   /* signal boot complete */
 }

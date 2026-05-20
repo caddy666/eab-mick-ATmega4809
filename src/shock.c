@@ -36,7 +36,6 @@
  */
 
 #include <stdint.h>
-#include <string.h>
 
 #include "defs.h"
 #include "driver.h"
@@ -85,23 +84,6 @@ uint8_t          shock_recovery_active = 0;
 
 /** Disc time at the end of the last successful progress check. */
 static cd_time_t last_absolute_time;
-
-/* =========================================================================
- * Static time-allocation pool
- *
- * The original 8051 firmware used a dynamic alloc/free_struct_time() heap
- * to temporarily hold two cd_time_t values during the progress check.
- * We replace that with a fixed two-entry static array — this is a bare-metal
- * target with no heap, and we never need more than two temps simultaneously.
- * ====================================================================== */
-
-static cd_time_t time_pool[2];
-
-/** Clear both pool entries at the start of each shock_recover() call. */
-static void reset_time_pool(void)
-{
-    memset(time_pool, 0, sizeof(time_pool));
-}
 
 /* =========================================================================
  * Mute helpers — thin wrappers so the intent is self-documenting
@@ -190,27 +172,26 @@ void shock_recover(void)
 {
     if (!shock_recovery_active) return;
 
-    reset_time_pool();
-    cd_time_t *position = &time_pool[0];   /* current disc time          */
-    cd_time_t *window   = &time_pool[1];   /* reused for both bounds     */
-
     if (!shock_phase0) {
         /* ── Phase 0: progress monitoring ── */
         if (progress_timer != 0) return;   /* interval not yet expired */
 
+        cd_time_t position = {0u, 0u, 0u};
+        cd_time_t window   = {0u, 0u, 0u};
+
         if (is_subcode(ABS_TIME)) {
-            move_abstime(position);
+            move_abstime(&position);
 
             /* Check lower bound: position must be > last + 15 frames */
-            window->min = 0; window->sec = 0; window->frm = 0x0F;
-            add_time(&last_absolute_time, window, window);
+            window.min = 0u; window.sec = 0u; window.frm = 0x0Fu;
+            add_time(&last_absolute_time, &window, &window);
 
-            if (compare_time(position, window) == BIGGER) {
+            if (compare_time(&position, &window) == BIGGER) {
                 /* Progress detected — check upper bound */
-                window->min = 0; window->sec = 1; window->frm = 0;
-                add_time(&last_absolute_time, window, window);
+                window.min = 0u; window.sec = 1u; window.frm = 0u;
+                add_time(&last_absolute_time, &window, &window);
 
-                if (compare_time(window, position) == SMALLER) {
+                if (compare_time(&window, &position) == SMALLER) {
                     /* Position is more than 1 s ahead of reference — shock */
                     shock_phase0 = 1;
                     mute_on();
@@ -237,10 +218,10 @@ void shock_recover(void)
         /* ── Phase 1: recovery seek ──
          * Target = last known good position + 40 frames.
          * 0x28 = 40 decimal = 40 frames (less than 75 so no carry into seconds). */
-        window->min = 0; window->sec = 0; window->frm = 0x28;
-        add_time(&last_absolute_time, window, window);
+        cd_time_t target = {0u, 0u, 0x28u};
+        add_time(&last_absolute_time, &target, &target);
 
-        uint8_t status = jump_time(window);
+        uint8_t status = jump_time(&target);
         if (status == READY) {
             /* Arrived at target: unmute, reset monitor */
             shock_phase0 = 0;
@@ -249,7 +230,7 @@ void shock_recover(void)
         } else if (status == CD_ERROR_STATE) {
             /* Target unreachable: advance the reference point past the bad spot
              * and try seeking further along. */
-            last_absolute_time = *window;
+            last_absolute_time = target;
         }
         /* BUSY: still seeking; continue next tick */
     }

@@ -97,9 +97,10 @@ void timer_init(void)
  */
 void blocking_delay(void)
 {
-    do {
+    /* while-loop (not do-while) avoids executing once when delay_byte == 0. */
+    while (delay_byte--) {
         delayMicroseconds(500);
-    } while (--delay_byte);
+    }
 }
 
 /**
@@ -108,5 +109,7 @@ void blocking_delay(void)
  */
 void delay_us_500x(uint8_t n)
 {
-    delayMicroseconds((unsigned int)n * 500u);
+    /* Use uint32_t product: (unsigned int) is 16-bit on AVR and overflows
+     * for n > 131 (132 * 500 = 66 000 > 65 535). */
+    delayMicroseconds((uint32_t)n * 500u);
 }

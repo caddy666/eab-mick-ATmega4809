@@ -147,9 +147,10 @@ void add_time(const cd_time_t *a, const cd_time_t *b, cd_time_t *r)
 /**
  * @brief  Subtract two CD times: r = a - b.
  *
- * Assumes a >= b; result is undefined if a < b (caller must check with
- * compare_time first).  Borrow propagates downward: frame borrows from
- * seconds at 75, seconds borrow from minutes at 60.
+ * Precondition: a >= b (caller MUST verify with compare_time() first).
+ * If a < b, min underflows as unsigned, producing a garbage result.
+ * Borrow propagates downward: frame borrows from seconds at 75,
+ * seconds borrow from minutes at 60.
  *
  * @param  a, b  Operands (hex, not BCD); a must be >= b.
  * @param  r     Result.

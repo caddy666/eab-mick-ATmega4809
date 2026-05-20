@@ -1,6 +1,6 @@
 /**
  * @file  serv_def.h
- * @brief Servo state-machine states and CXD2500BQ mode constants.
+ * @brief Servo state-machine states and CXD2545Q mode constants.
  *
  * Ported from the original Philips/Commodore firmware (1992-1993).
  *
@@ -62,11 +62,11 @@
 #define DOWNTO_N1               24  /**< Transition from 2× back to 1× speed          */
 
 /* -------------------------------------------------------------------------
- * CXD2500BQ status-type selectors (used with status_cd6() in driver.c)
+ * CXD2545Q status-type selectors (used with status_cd6() in driver.c)
  *
- * These are pseudo-addresses that driver.c's status_cd6() maps to the
- * simulated motor status flags.  On the real hardware they were read from
- * dedicated CXD2500 status pins; we model them in software.
+ * These are case discriminants passed to status_cd6(), not CXD2545Q register
+ * addresses.  status_cd6() maps each one to a GPIO read (GFS, SCOR) or
+ * returns a fixed value (MOT_STRT_2, MOTOR_OVERFLOW are unused on this board).
  * ---------------------------------------------------------------------- */
 #define SUBCODE_READY   0x20  /**< Subcode clock edge received (SCOR fired)    */
 #define MOT_STRT_1      0x21  /**< Motor has reached ≥75% nominal speed        */
@@ -76,11 +76,11 @@
 #define MOTOR_OVERFLOW  0x27  /**< Motor speed overflow (disc spinning too fast)*/
 
 /* -------------------------------------------------------------------------
- * CXD2500BQ motor-mode constants (written via cd6_wr() in driver.c)
+ * CXD2545Q motor-mode constants (written via cd6_wr() in driver.c)
  *
- * These are in the range 0x18–0x1F so they pass through the default case
- * in cd6_wr() only if not intercepted; driver.c maps them to actual
- * CXD2500 register values in the switch statement.
+ * These are case discriminants for the cd6_wr() switch, not raw CXD2545Q
+ * command bytes.  cd6_wr() translates each one to the actual $EX CLV MODE
+ * byte sent over the UCL/UDAT/ULAT bus.
  * ---------------------------------------------------------------------- */
 #define MOT_OFF_ACTIVE    0x18  /**< Motor off (free-run / stopped)                   */
 #define MOT_BRM1_ACTIVE   0x19  /**< Brake mode 1 — gentle brake                     */
@@ -111,20 +111,23 @@
 /* -------------------------------------------------------------------------
  * Default speed setting
  * ---------------------------------------------------------------------- */
-#define N  1   /**< N=1 → single speed; N=2 → double speed (compile-time default) */
+#define DEFAULT_DISC_SPEED  1   /**< Default disc speed: 1 = single (N=1), 2 = double (N=2) */
 
 /* -------------------------------------------------------------------------
- * CXD2500BQ register values
+ * CXD2545Q speed/gain case discriminants (written via cd6_wr() in driver.c)
  *
- * These are the raw 8-bit words written to the CXD2500BQ via cxd2500_wr().
- * They encode the PLL speed divider for a 33.8688 MHz crystal.
+ * These are case discriminants for the cd6_wr() switch, not raw CXD2545Q
+ * command bytes.  cd6_wr() maps each one to its actual IC byte:
+ *   SPEED_CONTROL_N1 → 0x99  ($9X FUNCTION SPEC: DCLV+DPLL, 1×)
+ *   SPEED_CONTROL_N2 → 0x9D  ($9X FUNCTION SPEC: DCLV+DPLL+DSPB, 2×)
+ *   MOT_GAIN_*       → 0xC1/0xC6 ($CX SERVO COEFF)
  * ---------------------------------------------------------------------- */
 #define SPEED_CONTROL_N1    0xB3  /**< CLV servo: 1× (1.2–1.4 m/s linear velocity)  */
 #define SPEED_CONTROL_N2    0xBB  /**< CLV servo: 2× (2.4–2.8 m/s linear velocity)  */
-#define MOT_GAIN_8CM_N1     0x41  /**< Motor gain G=4.0  (8 cm disc at 1×)           */
-#define MOT_GAIN_12CM_N1    0x44  /**< Motor gain G=12.8 (12 cm disc at 1×)          */
-#define MOT_GAIN_8CM_N2     0x43  /**< Motor gain G=8.0  (8 cm disc at 2×)           */
-#define MOT_GAIN_12CM_N2    0x46  /**< Motor gain G=12.8 (12 cm disc at 2×)          */
+#define MOT_GAIN_8CM_N1     0x41  /**< Motor gain (8 cm disc at 1×)                  */
+#define MOT_GAIN_12CM_N1    0x44  /**< Motor gain (12 cm disc at 1×)                 */
+#define MOT_GAIN_8CM_N2     0x43  /**< Motor gain (8 cm disc at 2×)                  */
+#define MOT_GAIN_12CM_N2    0x46  /**< Motor gain (12 cm disc at 2×)                 */
 
 /* -------------------------------------------------------------------------
  * DAC / audio output mode constants (high-level identifiers for cd6_wr())
@@ -136,9 +139,9 @@
 #define LEVEL_MODE    0x04  /**< Audio level-meter mode: VU-style                  */
 #define PEAK_MODE     0x08  /**< Audio level-meter mode: peak-hold                 */
 
-#define DAC_OUTPUT_MODE  0x30  /**< Set CXD2500 output to audio DAC mode (0x89)    */
+#define DAC_OUTPUT_MODE  0x30  /**< Set CXD2545Q to audio DAC mode (0x81: CDROM=0) */
 #define MOT_OUTPUT_MODE  0x31  /**< Set CXD2500 motor output mode     (0xD0)       */
 #define EBU_OUTPUT_MODE  0x32  /**< EBU digital output — not connected on CD32     */
 #define MUTE             0x33  /**< Mute audio output (set mute bit in audio_cntrl)*/
 #define FULL_SCALE       0x34  /**< Unmute audio output                            */
-#define ATTENUATE        0x35  /**< Attenuate audio output (−6 dB)                 */
+#define ATTENUATE        0x35  /**< Attenuate audio output (−12 dB via Reg A 0xA1) */

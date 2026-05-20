@@ -59,7 +59,7 @@ extern byte function_id;
  * Calls in order:
  *   timer_init()       — start 8 ms repeating timer + SCOR interrupt
  *   driver_init()      — configure all GPIO pins
- *   reset_dsic2_cd6()  — hardware reset sequence for CXD2500 and DSIC2
+ *   reset_cxd2545q()   — post-reset settling delay for the CXD2545Q
  *   servo_init()       — set servo state machine to its initial state
  *   cd6_init()         — send CXD2500 startup register configuration
  *

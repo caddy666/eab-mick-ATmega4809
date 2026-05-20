@@ -1,20 +1,20 @@
 /**
  * @file  driver.h
- * @brief Hardware driver API: CXD2500BQ (CD6), DSIC2 servo IC, subcode reader,
+ * @brief Hardware driver API: CXD2545Q (CD6), DSIC2 servo IC, subcode reader,
  *        analogue I/O sense, SCOR counter, and brake-table helpers.
  *
- * ── CXD2500BQ (referred to as "CD6" throughout the source) ───────────────
+ * ── CXD2545Q (referred to as "CD6" throughout the source) ────────────────
  *
- * Sony's CD signal processor IC.  Controls:
+ * Sony's CD signal processor IC with integrated digital servo.  Controls:
  *   - EFM decoder and CIRC error correction
  *   - CLV (constant linear velocity) spindle servo loop
- *   - Audio DAC output
+ *   - Audio DAC output (mute/attenuate via Register A: $AX)
  *   - Subcode serial output (QDA/QCL/SCOR)
  *
  * Interface: write-only, 3-wire bit-bang SPI (UCL/UDAT/ULAT).
- * Protocol: 3 dummy clock pulses, then 8 data bits LSB-first, then latch.
+ * Protocol: 8 data bits LSB-first, then latch (no dummy clocks).
  * High-level commands are expressed as symbolic constants (MOT_*, MUTE, etc.)
- * and translated to CXD2500 register values inside cd6_wr().
+ * and translated to CXD2545Q command bytes inside cd6_wr().
  *
  * ── DSIC2 (Sony CXA1372 servo IC) ────────────────────────────────────────
  *
@@ -54,46 +54,35 @@ extern "C" {
 void driver_init(void);
 
 /**
- * @brief  Assert the hardware reset lines for DSIC2 and CXD2500, then release.
+ * @brief  Post-reset settling delay for the CXD2545Q.
  *
- * The reset sequence requires specific timing (hundreds of µs) between
- * assert and release.  Implemented with delay() calls.  Called once from
- * player_init() before servo_init() and cd6_init().
+ * The CXD2545Q XRST (pin 81) is active-LOW and is driven by the board's
+ * power-on reset circuit.  This function waits for the IC to exit reset
+ * and become ready for register writes, then idles all serial buses.
+ * Called once from player_init() before servo_init() and cd6_init().
  */
-void reset_dsic2_cd6(void);
+void reset_cxd2545q(void);
 
 /* ─────────────────────────────────────────────────────────────────────────
- * CXD2500BQ write interface
+ * CXD2545Q write interface
  * ──────────────────────────────────────────────────────────────────────── */
 
 /**
- * @brief  Send a raw 8-bit word to the CXD2500BQ.
+ * @brief  Send a raw 8-bit command byte to the CXD2545Q.
  *
- * Sends 3 dummy clock pulses (required by CXD2500 framing) followed by
- * 8 data bits LSB-first on UCL/UDAT, then pulses ULAT to latch.
+ * Shifts 8 bits LSB-first on UCL/UDAT, then pulses ULAT to latch.
+ * No dummy clock preamble — the CXD2545Q CPU interface requires none.
  *
- * @param  data  Raw register value to send.
+ * @param  data  Command byte to send (e.g. 0xE0 for CLV STOP, 0xA2 for mute).
  */
 void cxd2500_wr(uint8_t data);
 
 /**
- * @brief  Send a combined audio-control word (opcode 0x0A) to the CXD2500.
- *
- * The CXD2500 audio register takes the high 6 bits of the control value
- * combined with the fixed 0x0A opcode.  The data byte is rotated right
- * by 2 bits before sending to place the control bits in the correct
- * position in the 8-bit frame.
- *
- * @param  data  Audio control byte.
- */
-void audio_cxd2500(uint8_t data);
-
-/**
- * @brief  Write a high-level motor/audio mode to the CXD2500BQ.
+ * @brief  Write a high-level motor/audio mode to the CXD2545Q.
  *
  * Maps symbolic constants (MOT_OFF_ACTIVE, MOT_STRTM1_ACTIVE, MUTE,
- * FULL_SCALE, etc.) to the actual CXD2500 register values and calls
- * cxd2500_wr() or audio_cxd2500() as appropriate.
+ * FULL_SCALE, etc.) to the actual CXD2545Q command bytes and calls
+ * cxd2500_wr() as appropriate.
  *
  * @param  mode  One of the MOT_* / DAC_* / MUTE / FULL_SCALE / ATTENUATE
  *               / SPEED_CONTROL_* constants from serv_def.h.
@@ -213,13 +202,9 @@ int zero_scor_counter(void);
  */
 void increment_scor_counter(void);
 
-/**
- * @brief  Enable the SCOR falling-edge interrupt.
- *
- * Called from main() after hardware initialisation.  On the 8051 this
- * was expressed as "EA=1; EX0=1" (global enable + external interrupt 0).
- */
-void enable_scor_counter(void);
+/* enable_scor_counter() was a no-op retained for the 8051 "EA=1; EX0=1"
+ * call site.  The SCOR ISR is now attached unconditionally inside
+ * timer_init(); the function and its call site have been removed. */
 
 /* ─────────────────────────────────────────────────────────────────────────
  * CXD2500 status polling
@@ -278,13 +263,6 @@ void set_level_meter_mode(uint8_t mode);
 extern uint8_t hex_abs_min;
 
 /**
- * Legacy motor-simulation down-counter.  No longer used for status reporting
- * (MOT_STRT_1 / MOT_STOP are now answered by the GFS GPIO).  Kept for any
- * external diagnostic code that may read it.
- */
-extern uint8_t simulation_timer;
-
-/**
  * @brief  Return the brake table value for the current disc position.
  *
  * Indexes a lookup table using hex_abs_min>>2 (roughly one entry per
@@ -297,7 +275,7 @@ extern uint8_t simulation_timer;
 uint8_t get_area(void);
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Supplementary CXD2500BQ / CXA1372Q signal accessors
+ * Supplementary CXD2545Q / CXA1372Q signal accessors
  * ──────────────────────────────────────────────────────────────────────── */
 
 /**
@@ -314,14 +292,14 @@ uint8_t get_area(void);
 int fok_locked(void);
 
 /**
- * @brief  Read the CXD2500BQ SENS (bidirectional status/sense) pin.
+ * @brief  Read the CXD2545Q SENS (pin 80) / SCLK (pin 83) serial status.
  *
- * Temporarily switches PIN_SENS to input, samples the level, then releases
- * direction so the next sens_write (if any) can drive it.  The status
- * condition reported on SENS is selected by writing to the CXD2500 serial
- * register beforehand.
+ * On this PCB revision PIN_SENS is (-1) — the SENS and SCLK lines are not
+ * routed to the ATmega4809 header.  sens_read() returns 0 unconditionally.
+ * Connecting SENS and SCLK would allow reading per-channel status bits
+ * (focus, tracking, CLV lock) from the CXD2545Q's serial output register.
  *
- * @return GPIO level: 1 or 0.
+ * @return GPIO level: 1 or 0 (always 0 when PIN_SENS == -1).
  */
 int sens_read(void);
 

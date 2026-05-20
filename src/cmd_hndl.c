@@ -94,6 +94,8 @@ void Init_command_handler(void)
  */
 void command_handler(void)
 {
+    uint8_t just_dispatched = 0;
+
     /* ── Dispatch pending command if player is idle ── */
     if (s_pending_cmd != NO_CMD &&
         player_interface.a_command == IDLE_OPC &&
@@ -107,16 +109,20 @@ void command_handler(void)
         s_pending_cmd   = NO_CMD;
         s_cmd_accepted  = 1;
         s_handler_ready = 0;   /* slot is now occupied by the executing command */
+        just_dispatched = 1;   /* block completion check this tick */
     }
 
-    /* ── Detect command completion ── */
-    if (!s_handler_ready) {
+    /* ── Detect command completion ──
+     * Skip when we just dispatched: player() hasn't run yet, so p_status
+     * is still READY from the *previous* command.  Without just_dispatched,
+     * the completion check would fire prematurely, set s_handler_ready = 1,
+     * and the host would never receive the real completion notification. */
+    if (!s_handler_ready && !just_dispatched) {
         if (player_interface.p_status == READY ||
             player_interface.p_status == CD_ERROR_STATE)
         {
             s_handler_ready = 1;   /* ready to accept the next command */
             s_cmd_accepted  = 0;
-            /* Notify Dispatcher: the host needs a status reply */
             Store_update_status(STATUS_UPDATE);
         }
     }

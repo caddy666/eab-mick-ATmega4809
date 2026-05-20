@@ -11,7 +11,8 @@
  * Pins defined as (-1) are not routed on this PCB revision:
  *   PIN_DSIC_CLK / PIN_DSIC_DATA / PIN_DSIC_LAT — DSIC2 bus (SICL/SIDA/SILD)
  *   PIN_HF_DET — HF (disc presence) detector, no dedicated header pin
- *   PIN_SENS   — CXD2500BQ SENS, routed to AREF/PD7 (no standard D-number)
+ *   PIN_SENS   — CXD2545Q SENS (pin 80), routed to AREF/PD7 (no standard D-number)
+ *   PIN_LOCK   — CXD2545Q LOCK (pin 98), not routed on this PCB revision
  *
  * driver.cpp guards every code path that would write to a (-1) pin with
  * #if PIN_xxx >= 0, so those paths are compiled out entirely.
@@ -46,10 +47,16 @@
  *  hf_present() returns 1 (disc assumed present) when this is (-1).        */
 #define PIN_HF_DET  (-1)
 
-/** CXD2500BQ SENS bidirectional status pin.
- *  Physically connected to AREF/PD7 — no standard D-number in MegaCoreX.
+/** CXD2545Q SENS (pin 80) bidirectional status pin / SCLK (pin 83) clock.
+ *  Physically routed to AREF/PD7 — no standard D-number in MegaCoreX.
  *  sens_read() returns 0 and write paths are compiled out.                  */
 #define PIN_SENS    (-1)
+
+/** CXD2545Q LOCK (pin 98) — debounced version of GFS; HIGH when CLV servo
+ *  is locked.  Connecting this pin would improve lock detection in the servo
+ *  state machine compared to polling GFS directly.  Recommended for a future
+ *  PCB revision.  status_cd6(MOT_STRT_1) uses raw GFS as a substitute.     */
+#define PIN_LOCK    (-1)
 
 /* Note: PIN_QDA, PIN_QCL, PIN_DOOR, PIN_SCOR, PIN_GFS, PIN_MUTE, PIN_FOK
  * are already defined in pins.h with the correct ATmega4809 D-numbers.      */

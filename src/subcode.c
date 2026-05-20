@@ -57,6 +57,7 @@
 #include "serv_def.h"
 #include "dsic2.h"
 #include "driver.h"
+#include "timer.h"
 
 /* Q_buffer index names (match subcode_frame_t in defs.h) */
 #define QB_CONAD   0   /**< Control + Address byte                 */
@@ -103,17 +104,8 @@ static uint8_t cd_disc = 1;
  * BCD conversion helpers
  * ====================================================================== */
 
-/**
- * @brief  Convert a single BCD byte to hex.
- * @param  bcd  Binary-coded decimal value (e.g. 0x59 for 59 seconds).
- * @return Equivalent hex value (e.g. 59).
- *
- * Example: 0x59 → (5 × 10) + 9 = 59.
- */
-static uint8_t bcd_to_hex(uint8_t bcd)
-{
-    return (uint8_t)(((bcd >> 4) * 10u) + (bcd & 0x0Fu));
-}
+/* Defined in maths.c — reuse rather than duplicating the implementation. */
+extern uint8_t bcd_to_hex(uint8_t bcd);
 
 /**
  * @brief  Convert three consecutive BCD bytes (min, sec, frm) to hex in place.
@@ -164,7 +156,6 @@ void start_subcode_reading(void)
 {
     subcode_reading     = 1;
     new_subcode_request = 1;
-    extern volatile uint8_t scor_edge;
     scor_edge = 0;   /* discard any SCOR edge that arrived before this arm */
 }
 
@@ -223,7 +214,8 @@ uint8_t is_subcode(uint8_t mode)
     case ABS_TIME:
         if (conad_lo == 0x01) {
             if (tno != 0) return TRUE;           /* program area — always valid  */
-            /* Lead-in (tno=0): only accept if CDR (rmin ≤ 90) */
+            /* Lead-in (tno=0): reject pressed CDs (cd_disc==1) and CDRs whose
+             * rmin marker is out-of-range (>90), accept only valid CDR lead-ins. */
             return (uint8_t)((rmin > 90u || cd_disc) ? FALSE : TRUE);
         }
         return FALSE;

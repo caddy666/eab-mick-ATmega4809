@@ -73,6 +73,10 @@ typedef struct {
 
 static commo_ctx_t s_commo;
 
+/* Tracks current direction of the DATA pin so pinMode() is only called on
+ * actual direction changes, not on every bit read/write. */
+static uint8_t s_data_is_output = 0;
+
 static const uint8_t command_length_table[16] = {
     1, 2, 1, 1, 12, 2, 1, 1, 4, 1, 1, 1, 1, 2, 1, 1
 };
@@ -88,19 +92,25 @@ static inline void commo_set_dir(int v)
 
 static inline void commo_set_data_out(int v)
 {
-    pinMode(PIN_COMMO_DATA, OUTPUT);
+    if (!s_data_is_output) {
+        pinMode(PIN_COMMO_DATA, OUTPUT);
+        s_data_is_output = 1;
+    }
     digitalWrite(PIN_COMMO_DATA, v ? HIGH : LOW);
 }
 
 static inline int commo_get_data(void)
 {
-    pinMode(PIN_COMMO_DATA, INPUT_PULLUP);
+    if (s_data_is_output) {
+        pinMode(PIN_COMMO_DATA, INPUT_PULLUP);
+        s_data_is_output = 0;
+    }
     return digitalRead(PIN_COMMO_DATA);
 }
 
 static inline void commo_set_clk(int v)
 {
-    pinMode(PIN_COMMO_CLK, OUTPUT);
+    /* CLK is configured OUTPUT once in COMMO_INIT; no need to set it each call. */
     digitalWrite(PIN_COMMO_CLK, v ? HIGH : LOW);
 }
 
@@ -159,7 +169,7 @@ static void commo_step(commo_ctx_t *c)
         uint8_t b = get_rxd_data();
         if (b == 0) {
             c->state        = COMMO_SM_ERR_SEND;
-            c->byte_counter = 128;
+            c->byte_counter = COMMO_ERR_DELAY_TICKS;
             break;
         }
         c->rx_buffer[0] = b;
@@ -227,6 +237,7 @@ static void commo_step(commo_ctx_t *c)
         if (c->byte_counter > 0) {
             c->byte_counter--;
         } else {
+            /* COMMO_ERR_DELAY_TICKS iterations elapsed — bus is now idle */
             c->rx_status  = COMMO_CMD_ERROR;
             c->report_cmd = 1;
             c->state      = COMMO_SM_IDLE;
@@ -251,10 +262,12 @@ void COMMO_INIT(void)
     pinMode(PIN_COMMO_DIR, OUTPUT);
     digitalWrite(PIN_COMMO_DIR, HIGH);    /* receive mode at startup */
 
-    /* CLK is driven by us as clock master; start idle-high */
-    pinMode(PIN_COMMO_CLK, INPUT_PULLUP);
+    /* CLK is driven by us as clock master; configure OUTPUT and idle-high. */
+    pinMode(PIN_COMMO_CLK, OUTPUT);
+    digitalWrite(PIN_COMMO_CLK, HIGH);
 
-    /* DATA is bidirectional; start as input (host may drive) */
+    /* DATA is bidirectional; start as input (host may drive). */
+    s_data_is_output = 0;
     pinMode(PIN_COMMO_DATA, INPUT_PULLUP);
 }
 
@@ -278,6 +291,7 @@ uint8_t GET_BUFFER(uint8_t idx)
 uint8_t SEND_STRING(uint8_t mode, uint8_t *data, uint8_t length)
 {
     if (s_commo.tx_req)                               return COMMO_FALSE;
+    if (length == 0)                                   return COMMO_FALSE;
     if (length > (uint8_t)sizeof(s_commo.tx_buffer))  return COMMO_FALSE;
 
     memcpy(s_commo.tx_buffer, data, length);
@@ -300,6 +314,6 @@ uint8_t SEND_STRING_READY(void)
 uint8_t FREE_CMD_BUFFER(void)
 {
     s_commo.report_cmd   = 0;
-    s_commo.cmd_buf_free = 1;
+    s_commo.cmd_buf_free = 1;   /* written but not consumed by the SM; kept for diagnostics */
     return COMMO_TRUE;
 }

@@ -2,7 +2,7 @@
  * @file  driver.cpp
  * @brief Hardware driver — ATmega4809 Arduino port.
  *
- * Bit-bangs the CXD2500BQ (CD6), DSIC2 servo IC, and Q-channel subcode
+ * Bit-bangs the CXD2545Q (CD6), DSIC2 servo IC, and Q-channel subcode
  * reader.  GPIO calls use the Arduino API (digitalWrite / digitalRead /
  * pinMode / delayMicroseconds).
  *
@@ -32,15 +32,13 @@ uint8_t audio_cntrl      = 0;
 uint8_t peak_level_low   = 0;
 uint8_t peak_level_high  = 0;
 uint8_t hex_abs_min      = 0;
-uint8_t simulation_timer = 0;
-
 int n1_speed = 1;   /* 1 = single-speed (N=1), 0 = double-speed (N=2) */
 
 /* =========================================================================
  * GPIO helpers
  * ====================================================================== */
 
-/* CXD2500BQ (UCL / UDAT / ULAT) */
+/* CXD2545Q (UCL / UDAT / ULAT) */
 static inline void UCL(int v)  { digitalWrite(PIN_CXD_CLK,  v ? HIGH : LOW); }
 static inline void UDAT(int v) { digitalWrite(PIN_CXD_DATA, v ? HIGH : LOW); }
 static inline void ULAT(int v) { digitalWrite(PIN_CXD_LAT,  v ? HIGH : LOW); }
@@ -109,7 +107,7 @@ void driver_init(void)
     /* Supplementary CXD2500BQ / CXA1372Q signals */
     pinMode(PIN_GFS, INPUT_PULLUP);
     pinMode(PIN_MUTE, OUTPUT);
-    digitalWrite(PIN_MUTE, HIGH);   /* idle = unmuted (active-low) */
+    digitalWrite(PIN_MUTE, LOW);    /* CXD2545Q: HIGH = mute; start non-muted */
 #if PIN_SENS >= 0
     pinMode(PIN_SENS, INPUT_PULLUP);
 #endif
@@ -133,10 +131,15 @@ void driver_init(void)
 }
 
 /* =========================================================================
- * reset_dsic2_cd6 — hardware power-on reset sequence
+ * reset_cxd2545q — hardware power-on reset timing sequence
+ *
+ * The CXD2545Q XRST (pin 81) is active-LOW (IC held in reset while LOW).
+ * XRST is driven by the board's power-on reset circuit, not a firmware GPIO.
+ * This function provides the post-reset settling delay the IC needs before
+ * register writes are accepted, then idles all serial bus lines.
  * ====================================================================== */
 
-void reset_dsic2_cd6(void)
+void reset_cxd2545q(void)
 {
     delay_byte = 160; blocking_delay();   /* 160 × 500 µs = 80 ms  */
     delay_byte = 40;  blocking_delay();   /*  40 × 500 µs = 20 ms  */
@@ -148,21 +151,21 @@ void reset_dsic2_cd6(void)
 #endif
     QCL(1); UDAT(1); UCL(1); ULAT(1);
 
-    extern volatile uint8_t scor_edge;
     scor_edge = 0;   /* discard any SCOR glitches during reset */
 }
 
 /* =========================================================================
- * cxd2500_wr — send an 8-bit command to the CXD2500BQ
+ * cxd2500_wr — send an 8-bit command to the CXD2545Q
  *
- * Protocol: 3 dummy clock pulses, then 8 data bits LSB-first, then latch.
+ * Protocol: 8 data bits LSB-first on UCL/UDAT, then latch pulse on ULAT.
+ * No dummy clocks (CXD2545Q CPU interface requires none, unlike CXD2500BQ).
+ * Latch pulse width minimum is 750 ns; the __builtin_avr_nop() makes the
+ * timing requirement explicit even though digitalWrite overhead already
+ * satisfies it at 16 MHz.
  * ====================================================================== */
 
 void cxd2500_wr(uint8_t data)
 {
-    UDAT(0);
-    for (int i = 0; i < 3; i++) { UCL(0); UCL(1); }
-
     for (int i = 0; i < 8; i++) {
         UCL(0);
         UDAT(data & 1);
@@ -170,39 +173,7 @@ void cxd2500_wr(uint8_t data)
         data >>= 1;
     }
 
-    ULAT(0); ULAT(1);
-    UDAT(1);
-}
-
-/* =========================================================================
- * audio_cxd2500 — send audio control word with opcode 0x0A
- *
- * Circular right-shift by 2 replicates the 8051 RRC RRC pre-rotation.
- * ====================================================================== */
-
-void audio_cxd2500(uint8_t data)
-{
-    UDAT(0);
-    for (int i = 0; i < 3; i++) { UCL(0); UCL(1); }
-
-    data = (uint8_t)((data >> 2) | (data << 6));
-
-    for (int i = 0; i < 6; i++) {
-        UCL(0);
-        UDAT(data & 1);
-        UCL(1);
-        data >>= 1;
-    }
-
-    uint8_t cmd = 0x0A;
-    for (int i = 0; i < 4; i++) {
-        UCL(0);
-        UDAT(cmd & 1);
-        UCL(1);
-        cmd >>= 1;
-    }
-
-    ULAT(0); ULAT(1);
+    ULAT(0); __builtin_avr_nop(); ULAT(1);  /* latch pulse ≥ 750 ns */
     UDAT(1);
 }
 
@@ -268,11 +239,12 @@ uint8_t rd_dsic2(void)
 
 int cd6_read_subcode(void)
 {
-    extern volatile uint8_t scor_edge;
-
     if (!scor_edge) return 0;
     scor_edge = 0;
 
+    /* QDA is the data-valid flag from the CXD2500.  If it is not asserted the
+     * frame is incomplete; discard it.  The consumed SCOR edge is intentionally
+     * lost — the caller must wait for the next 75 Hz edge. */
     if (!QDA()) return 0;
 
     peak_level_low  = 0;
@@ -297,12 +269,18 @@ int cd6_read_subcode(void)
 int hf_present(void)
 {
 #if PIN_HF_DET >= 0
+    /* Sample 5 times with no inter-sample spacing; all five must be high for
+     * a confirmed HF-present reading.  The consecutive reads (no delay) are
+     * sufficient for glitch rejection at this signal rate. */
     for (int i = 0; i < 5; i++) {
         if (!HF_PRESENT()) return 1;   /* active low: LOW = HF present */
     }
     return 0;
 #else
-    return 1;   /* PIN_HF_DET not routed — assume disc present */
+    /* PIN_HF_DET not routed on this PCB revision — permanently returns 1
+     * (disc assumed present).  As a consequence, the HF_DETECTOR_ERROR path
+     * in check_ttm_state() can never fire on this board. */
+    return 1;
 #endif
 }
 
@@ -317,27 +295,20 @@ int door_closed(void)
 
 void init_scor_counter(uint8_t count)
 {
-    extern volatile uint8_t scor_counter;
+    /* Load count directly.  The ISR decrements on every SCOR edge, so the
+     * counter reaches zero after exactly 'count' edges.  The previous
+     * pre-decrement caused count=1 to fire immediately (off-by-one). */
     scor_counter = count;
-    if (scor_counter > 0) scor_counter--;
 }
 
 int zero_scor_counter(void)
 {
-    extern volatile uint8_t scor_counter;
     return scor_counter == 0;
 }
 
 void increment_scor_counter(void)
 {
-    extern volatile uint8_t scor_counter;
     scor_counter++;
-}
-
-void enable_scor_counter(void)
-{
-    /* attachInterrupt() is called inside timer_init(); no-op retained for
-     * the original call-site in main.cpp / 8051 "EA=1; EX0=1". */
 }
 
 /* =========================================================================
@@ -424,29 +395,29 @@ void cd6_wr(uint8_t mode)
     case MOT_GAIN_12CM_N1:   cxd2500_wr(0xC1); break;
     case MOT_GAIN_8CM_N2:
     case MOT_GAIN_12CM_N2:   cxd2500_wr(0xC6); break;
-    case DAC_OUTPUT_MODE:    cxd2500_wr(0x89); break;
+    case DAC_OUTPUT_MODE:    cxd2500_wr(0x81); break;  /* $8X MODE SPEC: CDROM=0, WSEL=1 (audio mode) */
     case MOT_OUTPUT_MODE:    cxd2500_wr(0xD0); break;
     case EBU_OUTPUT_MODE:    break;   /* not connected on this revision */
 
     case MUTE:
         audio_cntrl |= 0x20u;
-        audio_cxd2500(audio_cntrl);
-        MUTE_PUT(0);    /* active-low hard-mute */
+        cxd2500_wr(0xA2);   /* Register A: mute */
+        MUTE_PUT(1);         /* CXD2545Q: HIGH = mute */
         break;
 
     case FULL_SCALE:
         if (audio_cntrl & 0x20u) {
             audio_cntrl &= 0xCFu;
-            audio_cxd2500(audio_cntrl);
-            MUTE_PUT(1);
+            cxd2500_wr(0xA0);   /* Register A: normal/unmute */
+            MUTE_PUT(0);         /* CXD2545Q: LOW = non-mute */
         }
         break;
 
     case ATTENUATE:
         audio_cntrl &= 0xCFu;
         audio_cntrl |= 0x10u;
-        MUTE_PUT(1);
-        audio_cxd2500(audio_cntrl);
+        cxd2500_wr(0xA1);   /* Register A: attenuate (-12 dB) */
+        MUTE_PUT(0);         /* CXD2545Q: LOW = non-mute */
         break;
 
     default:

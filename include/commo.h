@@ -87,6 +87,14 @@ extern "C" {
 #define ID_PACKET_LENGTH      15   /**< Disc ID / ISRC                          */
 
 /* ─────────────────────────────────────────────────────────────────────────
+ * Internal timing constant
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** Number of main-loop ticks to spin in ERR_SEND before returning to IDLE.
+ *  Each tick is one COMMO_INTERFACE() call.  128 ticks ≈ bus-idle recovery. */
+#define COMMO_ERR_DELAY_TICKS  128
+
+/* ─────────────────────────────────────────────────────────────────────────
  * API
  * ──────────────────────────────────────────────────────────────────────── */
 
